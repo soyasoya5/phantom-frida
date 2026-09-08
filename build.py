@@ -1509,7 +1509,9 @@ def configure_arch(frida_dir: Path, arch: str, ndk_path: Path, *, debug_symbols:
     log(f"Configuring for {arch}...", "STEP")
     command = ["./configure", f"--host={arch}"]
     if debug_symbols:
-        command.append("--enable-symbols")
+        # Keep DWARF in raw/modulated outputs, but strip final embedded assets.
+        # Frida forwards Meson options only after the argument separator.
+        command += ["--", "-Ddebug=true", "-Dstrip=true"]
     run(
         command,
         cwd=frida_dir,
@@ -1716,6 +1718,7 @@ def collect_artifacts(
                 server,
                 f"{custom_name}-server-{version}-android-{arch_short}",
                 stage_dir,
+                strip=True,
             ),
             *save_artifact(
                 gadget,
