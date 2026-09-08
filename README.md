@@ -314,3 +314,21 @@ is a diagnostic build, not a guarantee against changes in timing or reentrancy.
 If no null-table message appears, the covered sites have not identified the
 failure; the markers alone do not prove which table caused it. Source contract
 mismatches stop patching before files are changed. Start from a fresh Frida tree.
+
+### Early stream registration fix (Frida 17)
+
+Frida's libc shim may register a stream while `gum_init_embedded()` is still
+running, before its constructor creates the stream registry. Builds now always
+apply a source fix for Frida 17 and later: stream and directory registration
+lazily creates the corresponding registry under the existing stdio mutex, and
+the constructor preserves registries populated during startup. An early
+`fflush(NULL)` with no registry is a no-op. Gum's heap/allocator initialization
+order is unchanged. The patch validates the expected source and fails on drift;
+compatibility has been checked against 17.16.4 and 17.17.0.
+
+No workflow checkbox is required for this fix. With `startup_diagnostics` enabled,
+`streams-register-before-init` or `dirs-register-before-init` now describes the
+handled early-registration path. `shim-after-gum` and `streams-created` indicate
+that initialization progressed past the previously observed crash. Other
+`*-null` diagnostics still indicate unhandled sites. A successful device test is
+needed to establish whether the agent completes startup.
