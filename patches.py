@@ -592,12 +592,16 @@ def get_stability_patches_17(frida_dir: Path) -> list[dict]:
                 "Skip perfetto_hprof_ thread during enumeration (prevents SEGV on some devices)"
             ),
             "file": "subprojects/frida-gum/gum/backend-linux/gumprocess-linux.c",
-            # Verified 17.16.4: variable is entry->name, NOT details.name
-            "old": "    carry_on = func (entry, user_data);",
+            # Match the full unbraced conditional; cleanup must still run for skipped threads.
+            "old": (
+                "    if (gum_fill_thread_details (entry, flags))\n"
+                "      carry_on = func (entry, user_data);"
+            ),
             "new": (
-                '    if (entry->name != NULL && strcmp (entry->name, "perfetto_hprof_") == 0)\n'
-                "        goto skip;\n"
-                "    carry_on = func (entry, user_data);"
+                "    if (gum_fill_thread_details (entry, flags) &&\n"
+                "        (entry->name == NULL ||\n"
+                '         strcmp (entry->name, "perfetto_hprof_") != 0))\n'
+                "      carry_on = func (entry, user_data);"
             ),
         },
     ]
