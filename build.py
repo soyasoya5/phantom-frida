@@ -52,6 +52,7 @@ from patches import (
     get_targeted_patches,
     get_temp_path_patches,
 )
+from startup_diagnostics import apply_startup_diagnostics
 
 # --- Constants ---
 
@@ -1785,6 +1786,7 @@ def create_build_info(
     architectures: list[str],
     strict_wx: bool = False,
     debug_symbols: bool = False,
+    startup_diagnostics: bool = False,
 ) -> dict[str, object]:
     """Create release provenance for the builder and upstream source revisions."""
     repository = os.environ.get("GITHUB_REPOSITORY")
@@ -1804,6 +1806,7 @@ def create_build_info(
         "port": port or 27042,
         "strict_wx": strict_wx,
         "debug_symbols": debug_symbols,
+        "startup_diagnostics": startup_diagnostics,
         "workflow_url": workflow_url,
     }
 
@@ -1819,6 +1822,7 @@ def write_release_assets(
     architectures: list[str],
     strict_wx: bool = False,
     debug_symbols: bool = False,
+    startup_diagnostics: bool = False,
 ) -> tuple[Path, Path]:
     """Write deterministic metadata JSON and checksums for release artifacts."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1833,6 +1837,7 @@ def write_release_assets(
         architectures=architectures,
         strict_wx=strict_wx,
         debug_symbols=debug_symbols,
+        startup_diagnostics=startup_diagnostics,
     )
     info_path.write_text(
         json.dumps(info, indent=2, sort_keys=True) + "\n",
@@ -1927,7 +1932,13 @@ Transformations and verification boundaries:
         "--verify", action="store_true", help="Reject known forbidden markers in final artifacts"
     )
 
+    parser.add_argument(
+        "--startup-diagnostics", action="store_true",
+        help="Log Android startup/null-table sites to PD-STARTUP; implies --debug-symbols",
+    )
     args = parser.parse_args()
+    if args.startup_diagnostics:
+        args.debug_symbols = True
 
     # Validate
     version = validate_version(args.version)
@@ -1977,6 +1988,13 @@ Transformations and verification boundaries:
         if not frida_dir.exists():
             raise BuildError("--skip-clone requires existing source in work-dir")
         log(f"Using existing source at {frida_dir}", "OK")
+
+    if args.startup_diagnostics:
+        log("Applying Android startup diagnostics (PD-STARTUP)", "STEP")
+        try:
+            apply_startup_diagnostics(frida_dir)
+        except (OSError, ValueError) as error:
+            raise BuildError(str(error)) from error
 
     # Step 3: Source patches
     apply_source_patches(frida_dir, custom_name)
@@ -2061,6 +2079,7 @@ Transformations and verification boundaries:
             architectures=archs,
             strict_wx=args.strict_wx,
             debug_symbols=args.debug_symbols,
+            startup_diagnostics=args.startup_diagnostics,
         )
 
     # Done

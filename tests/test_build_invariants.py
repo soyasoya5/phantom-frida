@@ -189,7 +189,7 @@ def test_find_llvm_strip_accepts_linux_ndk_tool(tmp_path: Path) -> None:
     assert build.find_llvm_strip(tmp_path) == strip_tool
 
 
-def test_collect_artifacts_strips_only_staged_gadget_before_compression(
+def test_collect_artifacts_strips_staged_runtime_copies_before_compression(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     core_build = tmp_path / "build/subprojects/frida-core"
@@ -205,7 +205,7 @@ def test_collect_artifacts_strips_only_staged_gadget_before_compression(
 
     def fake_strip(binary: Path, _tool: Path) -> None:
         stripped.append(binary)
-        binary.write_bytes(b"stripped-gadget")
+        binary.write_bytes(b"stripped-gadget" if "gadget" in binary.name else b"stripped-server")
 
     monkeypatch.setattr(build, "strip_binary", fake_strip)
     output_dir = tmp_path / "stage"
@@ -221,7 +221,12 @@ def test_collect_artifacts_strips_only_staged_gadget_before_compression(
     )
 
     gadget_output = output_dir / "oemcodec-gadget-17.16.3-android-arm64.so"
-    assert [path.name for path in stripped] == [gadget_output.name]
+    server_output = output_dir / "oemcodec-server-17.16.3-android-arm64"
+    assert [path.name for path in stripped] == [server_output.name, gadget_output.name]
+    assert server_output.read_bytes() == b"stripped-server"
+    compressed_server = server_output.with_name(server_output.name + ".gz")
+    assert gzip.decompress(compressed_server.read_bytes()) == b"stripped-server"
+    assert server_source.read_bytes() == b"clean-server"
     assert gadget_output.read_bytes() == b"stripped-gadget"
     assert gzip.decompress(gadget_output.with_suffix(".so.gz").read_bytes()) == b"stripped-gadget"
     assert gadget_source.read_bytes() == b"unstripped-gadget"
