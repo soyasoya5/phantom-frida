@@ -29,6 +29,7 @@ import shlex
 import shutil
 import struct
 import subprocess
+import tarfile
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -1504,10 +1505,13 @@ def apply_binary_patches(binary_path: Path, custom_name: str, extended: bool = F
 # ============================================================================
 
 
-def configure_arch(frida_dir: Path, arch: str, ndk_path: Path):
+def configure_arch(frida_dir: Path, arch: str, ndk_path: Path, *, debug_symbols: bool = False):
     log(f"Configuring for {arch}...", "STEP")
+    command = ["./configure", f"--host={arch}"]
+    if debug_symbols:
+        command += ["-Ddebug=true", "-Dstrip=false"]
     run(
-        ["./configure", f"--host={arch}"],
+        command,
         cwd=frida_dir,
         env={"ANDROID_NDK_ROOT": str(ndk_path)},
     )
@@ -1560,6 +1564,47 @@ def output_transaction(output_dir: Path) -> Iterator[Path]:
             if had_previous_output:
                 os.replace(previous_output, output_dir)
             raise BuildError(f"Could not promote verified output directory: {error}") from error
+
+
+def collect_debug_symbols(
+    frida_dir: Path, output_dir: Path, name: str, version: str, arch: str, readelf: Path
+) -> Path:
+    """Archive DWARF-bearing component ELFs and generated source from this build."""
+    files: list[Path] = []
+    roles: set[str] = set()
+    for path in sorted((frida_dir / "build").rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        if path.suffix in {".c", ".h", ".cpp", ".vala"}:
+            files.append(path)
+            continue
+        component = next(
+            (role for role in ("agent", "server", "gadget", "helper") if f"-{role}" in path.name),
+            None,
+        )
+        if component is None or path.suffix in {".o", ".a"}:
+            continue
+        with path.open("rb") as source:
+            if source.read(4) != b"\x7fELF":
+                continue
+        result = subprocess.run(
+            [str(readelf), "--sections", "--wide", str(path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        if ".debug_info" in result.stdout:
+            files.append(path)
+            roles.add(component)
+    missing = {"agent", "server", "gadget"} - roles
+    if missing:
+        raise BuildError(f"Missing DWARF symbols for: {', '.join(sorted(missing))}")
+    archive = output_dir / f"{name}-symbols-{version}-{arch}.tar.gz"
+    with tarfile.open(archive, "w:gz") as stream:
+        for path in files:
+            stream.add(path, arcname=str(path.relative_to(frida_dir)), recursive=False)
+    log(f"Saved debug symbols: {archive.name}", "OK")
+    return archive
 
 
 def collect_artifacts(
@@ -1736,6 +1781,7 @@ def create_build_info(
     version: str,
     architectures: list[str],
     strict_wx: bool = False,
+    debug_symbols: bool = False,
 ) -> dict[str, object]:
     """Create release provenance for the builder and upstream source revisions."""
     repository = os.environ.get("GITHUB_REPOSITORY")
@@ -1754,6 +1800,7 @@ def create_build_info(
         "ndk_version": NDK_VERSION,
         "port": port or 27042,
         "strict_wx": strict_wx,
+        "debug_symbols": debug_symbols,
         "workflow_url": workflow_url,
     }
 
@@ -1768,6 +1815,7 @@ def write_release_assets(
     version: str,
     architectures: list[str],
     strict_wx: bool = False,
+    debug_symbols: bool = False,
 ) -> tuple[Path, Path]:
     """Write deterministic metadata JSON and checksums for release artifacts."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1781,6 +1829,7 @@ def write_release_assets(
         version=version,
         architectures=architectures,
         strict_wx=strict_wx,
+        debug_symbols=debug_symbols,
     )
     info_path.write_text(
         json.dumps(info, indent=2, sort_keys=True) + "\n",
@@ -1865,6 +1914,11 @@ Transformations and verification boundaries:
     parser.add_argument("--skip-clone", action="store_true", help="Use existing source in work-dir")
     parser.add_argument(
         "--skip-build", action="store_true", help="Only apply patches, don't compile"
+    )
+    parser.add_argument(
+        "--debug-symbols",
+        action="store_true",
+        help="Build with DWARF and archive unstripped component ELFs and generated sources",
     )
     parser.add_argument(
         "--verify", action="store_true", help="Reject known forbidden markers in final artifacts"
@@ -1956,7 +2010,7 @@ Transformations and verification boundaries:
             log("=" * 60, "HEADER")
 
             # Configure
-            configure_arch(frida_dir, arch, ndk_path)
+            configure_arch(frida_dir, arch, ndk_path, debug_symbols=args.debug_symbols)
 
             # First build
             log("First build...", "STEP")
@@ -1980,6 +2034,12 @@ Transformations and verification boundaries:
                 strip_tool=strip_tool,
             )
 
+            if args.debug_symbols:
+                readelf = strip_tool.with_name(
+                    strip_tool.name.replace("llvm-strip", "llvm-readelf")
+                )
+                collect_debug_symbols(frida_dir, staged_output, custom_name, version, arch, readelf)
+
         # Step 6: Verification
         if args.verify:
             log("=" * 60, "HEADER")
@@ -1997,6 +2057,7 @@ Transformations and verification boundaries:
             version=version,
             architectures=archs,
             strict_wx=args.strict_wx,
+            debug_symbols=args.debug_symbols,
         )
 
     # Done
