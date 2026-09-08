@@ -87,6 +87,25 @@ Useful options:
 --ndk-path       Use an existing Android NDK r29 directory
 ```
 
+## Crash diagnosis symbols
+
+Enable `debug_symbols` in Build Custom Frida, or pass `--debug-symbols` to
+`build.py`. This configures `./configure --host=<arch> -- -Ddebug=true -Dstrip=true`.
+The `--` separator is required by Frida's configure wrapper.
+
+DWARF stays in the raw/modulated build outputs; Frida strips final agent/helper
+assets before embedding them in the server. Published server and Gadget copies
+are also stripped. The whole-file marker verifier remains enabled and unchanged.
+
+The build artifact includes `<name>-symbols-<version>-<arch>.tar.gz`, containing
+DWARF-bearing component ELFs and generated sources. Keep this archive and
+`build-info.json` with the matching server. Reproduce the crash with that server;
+symbol offsets from a different build are not reliable. Android uses ELF/DWARF,
+not Windows PDB files.
+
+Use the matching raw/modulated **agent** ELF for an agent crash, not the server:
+`llvm-addr2line -C -f -i -e <agent-ELF> <relative-pc>`.
+
 ## Outputs and provenance
 
 For the example above, `output/` contains:
@@ -247,3 +266,51 @@ tests/                   Unit, contract, fixture, and workflow tests
 
 The builder code is MIT licensed. Generated binaries retain upstream licensing;
 see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### Android startup crash diagnostics
+
+Enable **startup_diagnostics** in the manual build workflow, or pass
+`--startup-diagnostics` to `build.py`. This automatically enables `--debug-symbols`.
+For the reported 32-bit crash, select `android-arm` and Frida `17.16.4`.
+Keep the other build options the same as the failing build.
+
+The optional source patch logs to Android tag `PD-STARTUP`: libc-shim startup
+stages and null tables at stream/directory registration, interceptor tables,
+code allocator dirty pages, and softened code pages. Each message includes a
+hexadecimal thread ID, a return address identifying the diagnostic call site,
+the runtime address of a named logger function, and a separate `caller` return
+address captured at the instrumentation site. Stream/directory registration is
+marked `noinline`, so its caller identifies the path entering registration.
+Other sites may still be inlined. It does not skip the
+original insertion or fix the crash. It does not capture a complete backtrace.
+
+Capture before reproducing, and stop with Ctrl+C afterward:
+
+```sh
+adb logcat -b all -v threadtime > frida-diagnostic.log
+```
+
+Retain the log, server, and symbols archive from this exact build. To resolve
+addresses despite ASLR, find the ELF symbol value of the site's logger:
+`pd_stdio_log`, `pd_interceptor_log`, `pd_allocator_log`, or `pd_memory_log`.
+For ARM Thumb, clear bit 0 from the runtime anchor and ELF symbol value first.
+Compute `load_bias = runtime_anchor - elf_logger_value`, then
+`elf_site = (runtime_site & ~1) - load_bias`. Use the matching agent (or Gadget)
+modulated ELF with `llvm-addr2line -f -C -i -e <elf> <elf_site>`; the site is a
+return address immediately after the diagnostic call. Resolve `caller` using
+the same load bias only when it belongs to the same ELF; callers outside that
+module require their own mapping and symbols. Return addresses may resolve to
+the line following the call.
+
+These diagnostics use a fixed stack buffer and the native Android log writer,
+with no GLib logging, stdio formatting, allocation, or runtime symbol lookup in
+the logger itself. A nonblocking atomic guard per logger suppresses nested or
+concurrent calls until the current log write completes; some messages may be
+lost by design. Stream/directory diagnostics run before acquiring the stdio
+mutex. Other sites may still hold internal locks: the guard prevents recursive
+logger execution, but cannot prevent an external log writer from blocking or
+re-entering a lock before reaching the guard. Android's log writer is still an external dependency, so this
+is a diagnostic build, not a guarantee against changes in timing or reentrancy.
+If no null-table message appears, the covered sites have not identified the
+failure; the markers alone do not prove which table caused it. Source contract
+mismatches stop patching before files are changed. Start from a fresh Frida tree.

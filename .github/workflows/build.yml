@@ -28,6 +28,11 @@ on:
         required: false
         type: boolean
         default: true
+      startup_diagnostics:
+        description: Log Android startup crash diagnostics (includes symbols)
+        required: false
+        type: boolean
+        default: false
       debug_symbols:
         description: Include unstripped ELF/DWARF symbols for crash diagnosis
         required: false
@@ -75,6 +80,11 @@ on:
         required: false
         type: boolean
         default: true
+      startup_diagnostics:
+        description: Log Android startup crash diagnostics (includes symbols)
+        required: false
+        type: boolean
+        default: false
       debug_symbols:
         description: Include unstripped ELF/DWARF symbols for crash diagnosis
         required: false
@@ -107,6 +117,7 @@ jobs:
       ARCHITECTURES: ${{ inputs.arch }}
       CUSTOM_NAME: ${{ inputs.custom_name }}
       CUSTOM_PORT: ${{ inputs.port }}
+      STARTUP_DIAGNOSTICS: ${{ inputs.startup_diagnostics }}
       DEBUG_SYMBOLS: ${{ inputs.debug_symbols }}
       EXTENDED_PATCHES: ${{ inputs.extended }}
       FRIDA_VERSION: ${{ inputs.frida_version }}
@@ -183,6 +194,9 @@ jobs:
           fi
           if [[ "$TEMPORARY_FIXES" == "true" ]]; then
             command+=(--temp-fixes)
+          fi
+          if [[ "$STARTUP_DIAGNOSTICS" == "true" ]]; then
+            command+=(--startup-diagnostics)
           fi
           if [[ "$DEBUG_SYMBOLS" == "true" ]]; then
             command+=(--debug-symbols)
