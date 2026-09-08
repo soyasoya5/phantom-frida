@@ -53,6 +53,7 @@ from patches import (
     get_temp_path_patches,
 )
 from startup_diagnostics import apply_startup_diagnostics
+from startup_fix import apply_startup_registry_fix
 
 # --- Constants ---
 
@@ -1993,6 +1994,13 @@ Transformations and verification boundaries:
         log("Applying Android startup diagnostics (PD-STARTUP)", "STEP")
         try:
             apply_startup_diagnostics(frida_dir)
+        except (OSError, ValueError) as error:
+            raise BuildError(str(error)) from error
+
+    if frida_major >= 17:
+        log("Fixing libc-shim registry initialization during Gum startup", "STEP")
+        try:
+            apply_startup_registry_fix(frida_dir)
         except (OSError, ValueError) as error:
             raise BuildError(str(error)) from error
 
