@@ -1509,7 +1509,7 @@ def configure_arch(frida_dir: Path, arch: str, ndk_path: Path, *, debug_symbols:
     log(f"Configuring for {arch}...", "STEP")
     command = ["./configure", f"--host={arch}"]
     if debug_symbols:
-        command += ["-Ddebug=true", "-Dstrip=false"]
+        command.append("--enable-symbols")
     run(
         command,
         cwd=frida_dir,
